@@ -39,8 +39,8 @@ const ROLES = {
     lang: 'Du hast keine besondere Fähigkeit. Nachts schläfst du. Am Tag hörst du gut zu, beobachtest die anderen und stimmst mit ab, wer ein Werwolf sein könnte.',
     tipp: 'Achte darauf, wer sich komisch verhält oder schnell jemanden beschuldigt.' },
   seherin: { name: 'Seherin', plural: 'Seherinnen', emoji: '🔮', team: 'dorf', color: '#6a3fb5', weight: 7,
-    kurz: 'Erfährt jede Nacht, ob ein Spieler ein Werwolf ist.',
-    lang: 'Jede Nacht darfst du auf einen Spieler tippen. Die App zeigt dir, ob dieser Spieler ein Werwolf ist oder nicht. Du hilfst dem Dorf mit deinem Wissen.',
+    kurz: 'Erfährt jede Nacht die wahre Rolle eines Spielers.',
+    lang: 'Jede Nacht darfst du dir einen Spieler aussuchen. Du erfährst dann, welche Rolle dieser Spieler wirklich hat. Du hilfst dem Dorf mit deinem Wissen.',
     tipp: 'Verrate nicht zu früh, dass du die Seherin bist – sonst holen dich die Wölfe!' },
   hexe: { name: 'Hexe', plural: 'Hexen', emoji: '🧙‍♀️', team: 'dorf', color: '#1f8a70', weight: 4,
     kurz: 'Hat einen Heiltrank und einen Gifttrank.',
@@ -185,7 +185,8 @@ const Speech = {
           player.onplaying = () => { this.clipError = ''; };
           player.src = `audio/${id}.mp3`;
           player.play().catch(fallback);
-        } else device();
+        } else if (CLIPS.size) next();
+        else device();
       };
       next();
     });
@@ -237,13 +238,16 @@ function show({ theme = 'night', title = '', help = 'home', body }) {
   window.scrollTo(0, 0);
 }
 // Sprechblase des Erzählers. Mit speak=true wird der Text sofort vorgelesen.
-function narrator(text, speak = true, hint) {
+// text: fester Erzählertext (kommt als Aufnahme). read: Satz mit Spielernamen – den liest der Spielleiter selbst vor.
+function narrator(text, speak = true, hint, read) {
+  const full = CLIPS.size || !read ? text : text + ' ' + read; // ohne Aufnahmen liest die Gerätestimme alles
   const el = h('div', { class: 'narrator' },
     h('div', { class: 'who' }, 'Erzähler', h('span', { class: 'wave' }, h('i'), h('i'), h('i'))),
     h('p', { class: 'say' }, text),
-    h('button', { class: 'again', onclick: () => Speech.speak(text) }, 'Nochmal vorlesen'),
-    hint && h('p', { class: 'hint' }, h('b', {}, 'Moderator: '), hint));
-  if (speak) Speech.speak(text);
+    h('button', { class: 'again', onclick: () => Speech.speak(full) }, 'Nochmal vorlesen'),
+    read && h('div', { class: 'read' }, h('b', {}, CLIPS.size ? 'Jetzt laut vorlesen' : 'Ansage'), h('p', {}, read)),
+    hint && h('p', { class: 'hint' }, h('b', {}, S && S.opt.mod ? 'Moderator: ' : 'Hinweis: '), hint));
+  if (speak) Speech.speak(full);
   return el;
 }
 function chip(p, { badge, sub, cls = '', onclick } = {}) {
@@ -267,11 +271,11 @@ function roleInfo(r) {
     h('p', {}, R.lang),
     h('div', { class: 'now' }, h('b', {}, '💡 Tipp: '), R.tipp),
     h('p', { class: 'soft' }, R.team === 'wolf' ? 'Gehört zu den Werwölfen.' : 'Gehört zum Dorf.'),
-    h('button', { class: 'btn', onclick: () => Speech.speak(`${R.name}. ${R.lang} Tipp: ${R.tipp}`) }, '🔊 Vorlesen'),
+    h('button', { class: 'btn', onclick: () => Speech.speak(`${R.lang} ${R.tipp}`) }, '🔊 Vorlesen'),
   ]);
 }
 // Auswahl-Bildschirm: lebende Spieler antippen, dann bestätigen.
-function picker({ theme = 'night', title, help, text, hint, speak = true, count = 1, rule, confirm = 'Fertig', extra, onDone }) {
+function picker({ theme = 'night', title, help, text, hint, read, speak = true, count = 1, rule, confirm = 'Fertig', extra, onDone }) {
   const sel = [];
   const btn = h('button', { class: 'btn primary big', disabled: true, onclick: () => onDone(count === 1 ? sel[0] : [...sel]) }, confirm);
   const chips = new Map();
@@ -286,7 +290,7 @@ function picker({ theme = 'night', title, help, text, hint, speak = true, count 
     chips.set(p.id, el);
     return el;
   }));
-  show({ theme, title, help, body: [narrator(text, speak, hint), grid, h('div', { class: 'spacer' }), extra, btn] });
+  show({ theme, title, help, body: [narrator(text, speak, hint, read), grid, h('div', { class: 'spacer' }), extra, btn] });
 }
 
 // ---------- Start ----------
@@ -432,7 +436,7 @@ function startGame() {
 function handover(i) {
   if (i >= S.players.length) return dealDone();
   const p = P(i);
-  const text = `Gib das Gerät an ${p.name}. Alle anderen schauen weg!`;
+  const text = 'Das Gerät geht jetzt weiter. Alle anderen schauen weg!';
   show({ theme: 'night', title: `Schritt 3 von 3 · ${i + 1}/${S.players.length}`, help: 'deal', body: [
     narrator(text),
     h('div', { class: 'handover card' }, av(p), h('div', { class: 'nm' }, p.name)),
@@ -588,12 +592,12 @@ function nightStep(steps, i) {
         hint: m && 'Tippe den Spieler an, auf den die Seherin zeigt.',
         rule: p => p.role === 'seherin' ? { off: true, sub: m ? 'Seherin' : 'das bist du' } : {},
         onDone: id => {
-          const p = P(id), wolf = p.role === 'werwolf';
-          const sign = 'Seherin, ich gebe dir jetzt ein Zeichen. Daumen nach unten bedeutet: ein Werwolf. Daumen nach oben bedeutet: kein Werwolf.';
+          const p = P(id), R = p.role && ROLES[p.role]; // mit echten Karten kann die Rolle noch unbekannt sein
+          const sign = 'Seherin, ich zeige dir jetzt die Karte dieses Spielers.';
           if (m) Speech.speak(sign); else Speech.stop();
           show({ theme: 'night', title, help: 'seherin', body: [
-            m && narrator(sign, false, wolf ? 'Zeige der Seherin den Daumen nach unten.' : 'Zeige der Seherin den Daumen nach oben.'),
-            h('div', { class: 'reveal ' + (wolf ? 'bad' : 'ok') }, `${p.name} ist ${wolf ? 'ein Werwolf.' : 'kein Werwolf.'}`),
+            m && narrator(sign, false, R ? `Zeige der Seherin kurz diesen Bildschirm: ${p.name} hat die Rolle „${R.name}“.` : `Hebe die Karte von ${p.name} verdeckt an und zeige sie nur der Seherin.`),
+            R && h('div', { class: 'reveal ' + (R.team === 'wolf' ? 'bad' : 'ok') }, h('div', { class: 'pair' }, roleIcon(p.role)), `${p.name}: ${R.name}`),
             !m && h('p', { class: 'center soft' }, 'Merk es dir gut – das wird nicht vorgelesen.'),
             h('div', { class: 'spacer' }),
             h('button', { class: 'btn primary big', onclick: () => next('Die Seherin schläft wieder ein.') }, m ? 'Erledigt' : 'Gemerkt'),
@@ -668,17 +672,16 @@ function kill(entries, done) {
   step();
 }
 const CAUSE = {
-  wolf: n => `Die Werwölfe haben ${n} erwischt.`,
-  gift: n => `${n} wurde vergiftet.`,
+  nacht: n => `${n} ist in dieser Nacht ausgeschieden.`, // ob Werwölfe oder Gift, bleibt geheim
   liebe: n => `${n} ist vor Liebeskummer mitgegangen.`,
   jaeger: n => `Der Jäger hat ${n} getroffen.`,
   dorf: n => `Das Dorf schickt ${n} fort.`,
 };
-function announce({ theme, title, intro, none, deaths, next }) {
+function announce({ theme, title, intro, some, none, deaths, next }) {
   const lines = deaths.map(d => `${CAUSE[d.cause](P(d.id).name)} ${P(d.id).name} hatte die Rolle: ${ROLES[P(d.id).role].name}.`);
-  const text = intro + ' ' + (deaths.length ? lines.join(' ') : none || '');
+  const text = (intro + ' ' + ((deaths.length ? some : none) || '')).trim();
   show({ theme, title, help: 'deaths', body: [
-    narrator(text),
+    narrator(text, true, null, deaths.length ? lines.join(' ') : null),
     deaths.map(d => { const p = P(d.id);
       return h('div', { class: 'card death' }, av(p),
         h('div', {}, h('h3', {}, p.name), h('p', { class: 'soft small' }, CAUSE[d.cause](p.name))),
@@ -695,8 +698,8 @@ function afterDeaths(next) {
     const hunter = P(S.pendingHunters.shift());
     if (living().length === 0) return afterDeaths(next);
     return picker({ theme, title: 'Der Jäger', help: 'jaeger', confirm: 'Mitnehmen',
-      text: `${hunter.name} war der Jäger! ${hunter.name}, du darfst jetzt einen Spieler bestimmen, der mit dir ausscheidet.`,
-      hint: MOD() && 'Tippe den Spieler an, auf den der Jäger zeigt.',
+      text: 'Unter den Ausgeschiedenen ist der Jäger! Jäger, du darfst jetzt einen Spieler bestimmen, der mit dir ausscheidet.',
+      hint: `Der Jäger ist ${hunter.name}.` + (MOD() ? ' Tippe den Spieler an, auf den er zeigt.' : ''),
       onDone: id => kill([{ id, cause: 'jaeger' }], deaths => announce({ theme, title: 'Der Jäger', intro: 'Der Jäger hat sich entschieden.', deaths, next: () => afterDeaths(next) })) });
   }
   const w = winner();
@@ -704,7 +707,8 @@ function afterDeaths(next) {
   if (S.opt.captain && S.captain != null && !P(S.captain).alive) {
     const old = P(S.captain);
     return picker({ theme, title: 'Neuer Hauptmann', help: 'hauptmann', confirm: 'Ernennen',
-      text: `${old.name} war der Hauptmann. ${old.name}, bestimme deinen Nachfolger.`,
+      text: 'Der Hauptmann ist ausgeschieden. Hauptmann, bestimme deinen Nachfolger.',
+      hint: `${old.name} war der Hauptmann.`,
       onDone: id => { S.captain = id; afterDeaths(next); } });
   }
   next();
@@ -714,19 +718,20 @@ function winner() {
   if (!al.length) return 'niemand';
   if (al.length === 2 && S.lovers.length === 2 && al.every(p => S.lovers.includes(p.id)) && wolves === 1) return 'liebe';
   if (!wolves) return 'dorf';
-  if (wolves >= al.length - wolves) return 'wolf';
+  if (wolves === al.length) return 'wolf';
   return null;
 }
 
 // ---------- Tag ----------
 function morning() {
   const nd = S.nd, hits = [];
-  if (nd.victim != null && nd.victim !== nd.protect && !nd.healed) hits.push({ id: nd.victim, cause: 'wolf' });
-  if (nd.poison != null) hits.push({ id: nd.poison, cause: 'gift' });
+  if (nd.victim != null && nd.victim !== nd.protect && !nd.healed) hits.push({ id: nd.victim, cause: 'nacht' });
+  if (nd.poison != null) hits.push({ id: nd.poison, cause: 'nacht' });
   S.lastProtected = nd.protect;
   S.phase = 'day';
   kill(shuffle(hits), deaths => announce({ theme: 'day', title: `Tag ${S.night}`, deaths,
     intro: 'Die Sonne geht auf über dem Finsterwald. Alle wachen auf und öffnen die Augen!',
+    some: 'Doch nicht alle haben die Nacht überstanden.',
     none: 'Gute Nachricht: In dieser Nacht ist niemand ausgeschieden!',
     next: () => afterDeaths(startDay) }));
 }
@@ -767,7 +772,7 @@ function discussion() {
   ] });
 }
 function vote() {
-  const cap = S.captain != null ? ` Die Stimme vom Hauptmann ${P(S.captain).name} zählt doppelt.` : '';
+  const cap = S.captain != null ? ' Die Stimme des Hauptmanns zählt doppelt.' : '';
   picker({ theme: 'day', title: `🗳️ Abstimmung · Tag ${S.night}`, help: 'vote', confirm: '✔ Dieser Spieler scheidet aus',
     text: `Abstimmung! Ich zähle: eins, zwei, drei! Jetzt zeigen alle gleichzeitig auf den Spieler, den sie für einen Werwolf halten.${cap} Tippt den Spieler mit den meisten Stimmen an.`,
     rule: p => ({ badge: badgeFor(p) }),
@@ -819,14 +824,14 @@ const HELP = {
   night: ['Alle haben die Augen zu. Wartet, bis der Erzähler eure Rolle aufruft.', 'Nur wer aufgerufen wird, öffnet leise die Augen und tippt auf dem Gerät.'],
   amor: ['Amor tippt zwei Spieler an und bestätigt. Danach tippt Amor den beiden leise auf die Schulter, damit sie wissen, dass sie verliebt sind.'],
   beschuetzer: ['Der Beschützer tippt einen Spieler an und bestätigt. Dieser Spieler ist heute Nacht sicher vor den Werwölfen.', 'Derselbe Spieler darf nicht zweimal hintereinander beschützt werden.'],
-  seherin: ['Die Seherin tippt einen Spieler an und bestätigt. Die App zeigt, ob dieser Spieler ein Werwolf ist.', 'Danach auf „Gemerkt“ tippen und wieder die Augen schließen.'],
+  seherin: ['Die Seherin sucht einen Spieler aus. Sie erfährt, welche Rolle dieser Spieler wirklich hat – auf dem Bildschirm oder über die echte Karte.', 'Danach auf „Gemerkt“ tippen und wieder die Augen schließen.'],
   werwolf: ['Nur die Werwölfe haben die Augen offen. Sie einigen sich ohne Worte – mit Zeigen und Nicken.', 'Ein Werwolf tippt das Opfer an und bestätigt. Werwölfe sind mit 🐺 markiert und können nicht gewählt werden.'],
   hexe: ['Die Hexe sieht, wen die Werwölfe angegriffen haben.', 'Grüner Knopf: Heiltrank benutzen und das Opfer retten. Roter Knopf: Gifttrank benutzen und einen Spieler aussuchen.', 'Jeder Trank geht nur einmal im ganzen Spiel. Wer nichts tun will, tippt einfach auf „Fertig“.'],
   deaths: ['Der Erzähler sagt, wer ausgeschieden ist und welche Rolle der Spieler hatte.', 'Wer ausgeschieden ist, darf nichts mehr verraten und schaut still zu. Dann auf „Weiter“ tippen.'],
   jaeger: ['Der Jäger ist ausgeschieden und darf einen Spieler mitnehmen. Der Jäger tippt den Spieler an und bestätigt.'],
   hauptmann: ['Alle zeigen gleichzeitig auf ihren Wunsch-Hauptmann. Tippt den Spieler mit den meisten Stimmen an.', 'Die Stimme des Hauptmanns zählt bei jeder Abstimmung doppelt. Scheidet er aus, bestimmt er einen Nachfolger.'],
   discussion: ['Jetzt reden alle miteinander: Wer könnte ein Werwolf sein?', 'Werwölfe tun so, als wären sie Dorfbewohner. Wenn ihr fertig seid, tippt auf „Zur Abstimmung“.'],
-  vote: ['Zählt bis drei. Dann zeigen alle gleichzeitig auf einen Spieler.', 'Tippt den Spieler mit den meisten Stimmen an und bestätigt. Bei Gleichstand entscheidet der Hauptmann – gibt es keinen, tippt auf „Gleichstand“.'],
+  vote: ['Zählt bis drei. Dann zeigen alle gleichzeitig auf einen Spieler.', 'Tippt den Spieler mit den meisten Stimmen an und bestätigt. Bei Gleichstand entscheidet der Hauptmann. Gibt es keinen, stimmt ihr noch einmal nur über die Spieler mit Gleichstand ab. Steht es wieder gleich, tippt auf „Gleichstand“.'],
   over: ['Das Spiel ist vorbei. Hier seht ihr, wer welche Rolle hatte.', '„Noch eine Runde“ startet ein neues Spiel mit denselben Spielern.'],
 };
 function helpModal() {
@@ -834,13 +839,13 @@ function helpModal() {
   if (S && S.opt.mod) now.unshift('Du bist der Moderator: Nur du schaust auf das Gerät. Die Spieler zeigen stumm, du tippst für sie. Hinweise an dich stehen unter dem Erzählertext.');
   modal('❓ Hilfe', [
     h('div', { class: 'now stack' }, h('h3', {}, '👉 Was mache ich jetzt?'), now.map(t => h('p', {}, t)),
-      h('button', { class: 'btn', onclick: () => Speech.speak(now.join(' ')) }, '🔊 Vorlesen')),
+      !CLIPS.size && h('button', { class: 'btn', onclick: () => Speech.speak(now.join(' ')) }, 'Vorlesen')),
     h('details', {}, h('summary', {}, '📖 Die Spielregeln – kurz erklärt'), h('div', { class: 'in' },
       h('p', {}, 'Im Dorf Finsterwald verstecken sich Werwölfe. Niemand weiß, wer sie sind!'),
       h('p', {}, h('b', {}, '🌙 In der Nacht '), 'schließen alle die Augen. Die Werwölfe wachen auf und suchen heimlich einen Spieler aus, der ausscheidet. Manche Dorfbewohner haben besondere Kräfte und werden auch aufgerufen.'),
       h('p', {}, h('b', {}, '☀️ Am Tag '), 'wachen alle auf. Das Dorf berät und stimmt ab, wer ein Werwolf sein könnte. Der Spieler mit den meisten Stimmen scheidet aus und zeigt seine Rolle.'),
-      h('p', {}, h('b', {}, '🏆 Wer gewinnt? '), 'Das Dorf gewinnt, wenn alle Werwölfe gefunden sind. Die Werwölfe gewinnen, wenn sie mindestens so viele sind wie die übrigen Spieler.'),
-      h('p', {}, h('b', {}, '🤫 Wichtig: '), 'Wer ausgeschieden ist, verrät nichts mehr. Und in der Nacht gilt: Augen zu und leise sein!'))),
+      h('p', {}, h('b', {}, '🏆 Wer gewinnt? '), 'Das Dorf gewinnt, wenn alle Werwölfe gefunden sind. Die Werwölfe gewinnen, wenn außer ihnen niemand mehr im Spiel ist. Sind ein Werwolf und ein Dorfbewohner ineinander verliebt, gewinnen die beiden nur gemeinsam – als die letzten zwei Spieler.'),
+      h('p', {}, h('b', {}, '🤫 Wichtig: '), 'Wer ausgeschieden ist, verrät nichts mehr. Verliebte stimmen nie gegeneinander. Und in der Nacht gilt: Augen zu und leise sein!'))),
     h('details', {}, h('summary', {}, '🎭 Alle Rollen'), h('div', { class: 'in' },
       ROLE_ORDER.map(k => h('div', { class: 'row' }, roleIcon(k), h('div', { class: 'rtxt' }, h('b', {}, ROLES[k].name), h('span', {}, ROLES[k].lang)))))),
     h('details', {}, h('summary', {}, '👥 Welche Rollen bei wie vielen Spielern?'), h('div', { class: 'in' },
@@ -867,15 +872,15 @@ function settingsModal() {
         settings.voiceOn = !settings.voiceOn; saveSettings(); b.classList.toggle('on', settings.voiceOn); b.setAttribute('aria-checked', String(settings.voiceOn)); if (!settings.voiceOn) Speech.stop();
       } }); return b; })()),
     h('div', { class: 'now' }, CLIPS.size
-      ? `Erzähler-Aufnahmen: ${CLIPS.size} geladen. Sie werden für alle festen Erzählertexte benutzt.`
+      ? `Erzähler-Aufnahmen: ${CLIPS.size} geladen. Sätze mit Spielernamen liest der Spielleiter selbst vor – sie stehen dann unter „Jetzt laut vorlesen“.`
       : 'Erzähler-Aufnahmen: keine gefunden. Es spricht die Stimme des Geräts.',
       Speech.clipError && h('p', { class: 'small soft' }, `Letzte Aufnahme konnte nicht abgespielt werden (${Speech.clipError}). Tippe auf „Ausprobieren“.`)),
-    Speech.ok && h('div', { class: 'stack' }, h('b', {}, CLIPS.size ? 'Gerätestimme (für Sätze mit Namen)' : 'Stimme'),
+    Speech.ok && !CLIPS.size && h('div', { class: 'stack' }, h('b', {}, 'Stimme'),
       vs.length
         ? h('select', { 'aria-label': 'Stimme auswählen', onchange: e => { settings.voiceURI = e.target.value; saveSettings(); Speech.speak(sample); } },
           vs.map(v => h('option', { value: v.voiceURI, selected: (Speech.pick() || {}).voiceURI === v.voiceURI }, v.name)))
         : h('p', { class: 'soft small' }, 'Es wurde keine deutsche Stimme gefunden. Das Gerät benutzt seine Standard-Stimme. In den Geräte-Einstellungen unter „Sprachausgabe“ könnt ihr deutsche Stimmen laden.')),
-    Speech.ok && h('div', { class: 'stack' }, h('b', {}, 'Tempo'),
+    Speech.ok && !CLIPS.size && h('div', { class: 'stack' }, h('b', {}, 'Tempo'),
       h('input', { type: 'range', min: '0.6', max: '1.3', step: '0.05', value: settings.rate, 'aria-label': 'Sprechtempo', onchange: e => { settings.rate = +e.target.value; saveSettings(); Speech.speak(sample); } }),
       h('div', { class: 'meterlabels' }, h('span', {}, '🐢 langsam'), h('span', {}, 'schnell 🐇'))),
     (Speech.ok || CLIPS.size > 0) && h('button', { class: 'btn primary', onclick: () => { settings.voiceOn = true; saveSettings(); Speech.speak(sample); } }, 'Ausprobieren'),
