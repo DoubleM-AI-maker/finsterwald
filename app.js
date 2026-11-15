@@ -102,16 +102,27 @@ function clipId(sentence) {
 }
 const CLIPS = new Set(window.CLIPS || []); // vorhandene Erzähler-Aufnahmen im Ordner audio/
 const player = typeof Audio === 'function' ? new Audio() : null;
-// Mobile Browser erlauben Ton erst nach einer Berührung: den Abspieler beim ersten Tippen freischalten.
-if (player) document.addEventListener('pointerdown', function unlock() {
-  document.removeEventListener('pointerdown', unlock);
-  if (!CLIPS.size || !player.paused) return;
-  player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
-  player.play().catch(() => {});
-}, { passive: true });
+// Safari und mobile Browser erlauben Ton nur, wenn er einmal direkt in einer Berührung gestartet wurde.
+// Deshalb beim ersten Tippen einen kurzen stillen Ton abspielen; danach darf der Abspieler jederzeit starten.
+let unlocked = false;
+const SILENCE = (() => {
+  const n = 400, buf = new ArrayBuffer(44 + n * 2), dv = new DataView(buf);
+  const w = (o, t) => [...t].forEach((c, i) => dv.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, 8000, true); dv.setUint32(28, 16000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); w(36, 'data'); dv.setUint32(40, n * 2, true);
+  try { return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })); } catch { return ''; }
+})();
+function unlockAudio() {
+  if (unlocked || !player || !CLIPS.size || !SILENCE) return;
+  unlocked = true;
+  player.src = SILENCE;
+  const p = player.play();
+  if (p) p.catch(e => { if (e && e.name === 'NotAllowedError') unlocked = false; });
+}
+['click', 'touchend', 'keydown'].forEach(ev => document.addEventListener(ev, unlockAudio, true));
 
 const Speech = {
-  id: 0, voices: [],
+  id: 0, voices: [], clipError: '',
   ok: 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window,
   init() {
     if (!this.ok) return;
@@ -148,6 +159,7 @@ const Speech = {
       const next = () => {
         if (my !== this.id) return res(false);
         if (i >= parts.length) { setTalking(false); return res(true); }
+        const first = i === 0;
         const part = parts[i++].trim();
         if (!part) return next();
         let done = false;
@@ -161,20 +173,21 @@ const Speech = {
         guard = setTimeout(fin, 3000 + part.length * 140 / settings.rate);
         u.onend = fin; u.onerror = fin;
         this._keep = u; // verhindert, dass der Browser die Ansage vorzeitig wegräumt
-        speechSynthesis.speak(u);
+        setTimeout(() => { if (my === this.id) speechSynthesis.speak(u); else fin(); }, first ? 80 : 0);
         };
         const id = clipId(part);
         if (player && CLIPS.has(id)) {
           guard = setTimeout(fin, 30000);
           player.onended = fin;
           let fell = false; // Aufnahme lässt sich nicht abspielen: einmalig auf die Gerätestimme ausweichen
-          const fallback = () => { if (fell || done || my !== this.id) return; fell = true; clearTimeout(guard); device(); };
+          const fallback = e => { if (fell || done || my !== this.id) return; fell = true; clearTimeout(guard); this.clipError = (e && e.name) || 'Datei nicht ladbar'; device(); };
           player.onerror = () => { CLIPS.delete(id); fallback(); };
+          player.onplaying = () => { this.clipError = ''; };
           player.src = `audio/${id}.mp3`;
           player.play().catch(fallback);
         } else device();
       };
-      setTimeout(next, 80);
+      next();
     });
   },
 };
@@ -853,7 +866,11 @@ function settingsModal() {
       (() => { const b = h('button', { class: 'switch' + (settings.voiceOn ? ' on' : ''), role: 'switch', 'aria-checked': String(settings.voiceOn), 'aria-label': 'Vorlesen', onclick: () => {
         settings.voiceOn = !settings.voiceOn; saveSettings(); b.classList.toggle('on', settings.voiceOn); b.setAttribute('aria-checked', String(settings.voiceOn)); if (!settings.voiceOn) Speech.stop();
       } }); return b; })()),
-    Speech.ok && h('div', { class: 'stack' }, h('b', {}, 'Stimme'),
+    h('div', { class: 'now' }, CLIPS.size
+      ? `Erzähler-Aufnahmen: ${CLIPS.size} geladen. Sie werden für alle festen Erzählertexte benutzt.`
+      : 'Erzähler-Aufnahmen: keine gefunden. Es spricht die Stimme des Geräts.',
+      Speech.clipError && h('p', { class: 'small soft' }, `Letzte Aufnahme konnte nicht abgespielt werden (${Speech.clipError}). Tippe auf „Ausprobieren“.`)),
+    Speech.ok && h('div', { class: 'stack' }, h('b', {}, CLIPS.size ? 'Gerätestimme (für Sätze mit Namen)' : 'Stimme'),
       vs.length
         ? h('select', { 'aria-label': 'Stimme auswählen', onchange: e => { settings.voiceURI = e.target.value; saveSettings(); Speech.speak(sample); } },
           vs.map(v => h('option', { value: v.voiceURI, selected: (Speech.pick() || {}).voiceURI === v.voiceURI }, v.name)))
@@ -861,7 +878,7 @@ function settingsModal() {
     Speech.ok && h('div', { class: 'stack' }, h('b', {}, 'Tempo'),
       h('input', { type: 'range', min: '0.6', max: '1.3', step: '0.05', value: settings.rate, 'aria-label': 'Sprechtempo', onchange: e => { settings.rate = +e.target.value; saveSettings(); Speech.speak(sample); } }),
       h('div', { class: 'meterlabels' }, h('span', {}, '🐢 langsam'), h('span', {}, 'schnell 🐇'))),
-    Speech.ok && h('button', { class: 'btn primary', onclick: () => { settings.voiceOn = true; saveSettings(); Speech.speak(sample); } }, '🔊 Ausprobieren'),
+    (Speech.ok || CLIPS.size > 0) && h('button', { class: 'btn primary', onclick: () => { settings.voiceOn = true; saveSettings(); Speech.speak(sample); } }, 'Ausprobieren'),
   ]);
 }
 
