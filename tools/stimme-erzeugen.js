@@ -8,6 +8,8 @@
  * - Gesendet werden ausschließlich die Sätze aus audio/texte.json an api.elevenlabs.io.
  * - Vorhandene Aufnahmen werden übersprungen; mit --neu werden alle neu erzeugt.
  * - Mit --pruefen wird nur geprüft, ob die Textliste noch zur App passt (kein Netzwerkzugriff).
+ * - Mit --stimmen werden die Stimmen deines Kontos aufgelistet (nur der Schlüssel ist nötig).
+ * - Mit --probe wird nur ein Probesatz erzeugt (audio/probe-<Voice-ID>.mp3), um Stimmen zu vergleichen.
  */
 'use strict';
 const fs = require('fs');
@@ -41,6 +43,22 @@ if (args.includes('--pruefen')) {
 }
 
 const key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID;
+if (key && args.includes('--stimmen')) {
+  fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': key } }).then(async res => {
+    if (!res.ok) { console.error(`Fehler ${res.status}: ${(await res.text()).slice(0, 300)}`); process.exit(1); }
+    const voices = (await res.json()).voices || [];
+    const free = v => v.category === 'premade';
+    voices.sort((a, b) => free(b) - free(a) || a.name.localeCompare(b.name));
+    console.log('Voice-ID               Name                 Art         Beschreibung');
+    for (const v of voices) {
+      const l = v.labels || {};
+      console.log([v.voice_id.padEnd(22), v.name.slice(0, 20).padEnd(20), (free(v) ? 'Standard' : v.category || '?').padEnd(11),
+        [l.gender, l.age, l.accent, l.description, l.use_case].filter(Boolean).join(', ')].join(' '));
+    }
+    console.log('\n„Standard“-Stimmen sind die mitgelieferten; nur sie lassen sich im kostenlosen Tarif per Skript nutzen.');
+  }).catch(e => { console.error(e); process.exit(1); });
+  return;
+}
 if (!key || !voice) {
   console.error('Bitte ELEVENLABS_API_KEY und ELEVENLABS_VOICE_ID als Umgebungsvariablen setzen (siehe Kopf dieser Datei).');
   process.exit(1);
@@ -49,10 +67,15 @@ const model = process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 (async () => {
+  if (args.includes('--probe')) { // ein Satz zum Probehören, verbraucht nur wenige Zeichen
+    texts.length = 0;
+    texts.push('Es wird Nacht im Finsterwald. Der Mond steigt über die Bäume, und im Dorf wird es ganz still.');
+  }
   let made = 0;
   for (const text of texts) {
-    const file = path.join(dir, clipId(text) + '.mp3');
-    if (fs.existsSync(file) && !args.includes('--neu')) continue;
+    const probe = args.includes('--probe');
+    const file = path.join(dir, (probe ? 'probe-' + voice : clipId(text)) + '.mp3');
+    if (fs.existsSync(file) && !args.includes('--neu') && !probe) continue;
     const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_128`, {
       method: 'POST',
       headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
@@ -66,6 +89,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
     made++;
     console.log(`✓ ${text}`);
+    if (probe) { console.log('Probe gespeichert: ' + path.relative(root, file)); return; }
     await sleep(400);
   }
   const n = writeManifest();
