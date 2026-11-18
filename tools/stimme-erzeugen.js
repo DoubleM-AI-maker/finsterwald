@@ -2,9 +2,13 @@
 /* Erzeugt die Erzähler-Aufnahmen für "Nacht im Finsterwald" mit ElevenLabs.
  *
  * Aufruf (im Projektordner):
- *   ELEVENLABS_API_KEY=... ELEVENLABS_VOICE_ID=... node tools/stimme-erzeugen.js
+ *   node tools/stimme-erzeugen.js
  *
- * - Der Schlüssel wird nur aus der Umgebungsvariable gelesen und nirgends gespeichert.
+ * - Der Schlüssel kommt aus dem macOS-Schlüsselbund (Eintrag "finsterwald-elevenlabs") oder aus der
+ *   Umgebungsvariable ELEVENLABS_API_KEY. Einmalig im Terminal hinterlegen (fragt verdeckt nach dem Schlüssel):
+ *     security add-generic-password -U -s finsterwald-elevenlabs -a elevenlabs -w
+ *   Er wird nie in eine Datei des Projekts geschrieben.
+ * - Die Stimme steht in audio/stimme.json oder in ELEVENLABS_VOICE_ID.
  * - Gesendet werden ausschließlich die Sätze aus audio/texte.json an api.elevenlabs.io.
  * - Vorhandene Aufnahmen werden übersprungen; mit --neu werden alle neu erzeugt.
  * - Mit --pruefen wird nur geprüft, ob die Textliste noch zur App passt (kein Netzwerkzugriff).
@@ -18,7 +22,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const dir = path.join(root, 'audio');
 const texts = [...new Set(JSON.parse(fs.readFileSync(path.join(dir, 'texte.json'), 'utf8')))];
-const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const app = ['app.js', 'rollen.js', 'spiel.js'].map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 const args = process.argv.slice(2);
 
 // Muss exakt zu clipId() in app.js passen.
@@ -36,13 +40,17 @@ function writeManifest() {
 }
 
 const stale = texts.filter(t => !app.includes(t));
-if (stale.length) console.warn('Hinweis: Diese Sätze stehen nicht mehr in app.js und würden nie abgespielt:\n  ' + stale.join('\n  '));
+if (stale.length) console.warn('Hinweis: Diese Sätze stehen nicht mehr im Programm und würden nie abgespielt:\n  ' + stale.join('\n  '));
 if (args.includes('--pruefen')) {
   console.log(`${texts.length} Sätze, ${texts.join(' ').length} Zeichen, ${writeManifest()} Aufnahmen vorhanden.`);
   process.exit(stale.length ? 1 : 0);
 }
 
-const key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID;
+function keychain() { // macOS-Schlüsselbund; gibt '' zurück, wenn dort nichts liegt
+  try { return require('child_process').execFileSync('security', ['find-generic-password', '-s', 'finsterwald-elevenlabs', '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; }
+}
+function savedVoice() { try { return JSON.parse(fs.readFileSync(path.join(dir, 'stimme.json'), 'utf8')).voice || ''; } catch { return ''; } }
+const key = process.env.ELEVENLABS_API_KEY || keychain(), voice = process.env.ELEVENLABS_VOICE_ID || savedVoice();
 if (key && args.includes('--stimmen')) {
   fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': key } }).then(async res => {
     if (!res.ok) { console.error(`Fehler ${res.status}: ${(await res.text()).slice(0, 300)}`); process.exit(1); }
@@ -60,7 +68,8 @@ if (key && args.includes('--stimmen')) {
   return;
 }
 if (!key || !voice) {
-  console.error('Bitte ELEVENLABS_API_KEY und ELEVENLABS_VOICE_ID als Umgebungsvariablen setzen (siehe Kopf dieser Datei).');
+  if (!key) console.error('Kein ElevenLabs-Schlüssel gefunden. Bitte einmalig im Terminal (nicht im Chat) hinterlegen:\n\n  security add-generic-password -U -s finsterwald-elevenlabs -a elevenlabs -w\n\nDer Befehl fragt verdeckt nach dem Schlüssel. Danach diesen Aufruf wiederholen.');
+  if (!voice) console.error('Keine Stimme festgelegt: audio/stimme.json fehlt und ELEVENLABS_VOICE_ID ist nicht gesetzt.');
   process.exit(1);
 }
 const model = process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2';

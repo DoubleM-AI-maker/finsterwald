@@ -292,3 +292,10 @@ input[type="range"] { accent-color: var(--brass); height: 32px; }
 .read { align-self: stretch; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, var(--brass) 16%, var(--card)); border: 1px solid var(--brass); }
 .read b { font-size: .7rem; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); display: block; margin-bottom: 4px; }
 .read p { font-family: var(--serif); font-size: 1.2rem; line-height: 1.4; }
+
+/* ---------- Rollenauswahl nach Ausgaben ---------- */
+.presets.four { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 620px) { .presets.four { grid-template-columns: repeat(4, 1fr); } }
+details.set { background: var(--card); border: 1px solid var(--card-line); border-radius: var(--radius); padding: 0 18px; }
+details.set summary { gap: 6px; }
+details.set .in { color: inherit; gap: 0; }
