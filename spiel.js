@@ -102,6 +102,7 @@ function rolesScreen() {
       h('div', { class: 'card stack' },
         h('h3', {}, 'Extras'),
         toggle('Hauptmann wählen', 'Das Dorf wählt vor der ersten Nacht einen Hauptmann. Seine Stimme zählt doppelt.', 'captain'),
+        toggle('Seherin erfährt nur: Werwolf oder nicht', 'Hausregel statt der offiziellen Regel: Die Seherin sieht nicht die Karte, sondern erfährt nur, ob der Spieler zum Rudel gehört. Infizierte und Seitenwechsler auf Wolfsseite zählen als Werwolf.', 'seerSimple'),
         toggle('Schnelles Ende', 'Abweichend von der Regel endet das Spiel schon, sobald die Werwölfe nicht mehr überstimmt werden können.', 'quick'),
         toggle('Ereigniskarten „Neumond“', 'Die App erinnert jeden Morgen ab dem zweiten Tag daran, eine Ereigniskarte zu ziehen. Die Wirkung setzt der Spielleiter um.', 'events'),
         h('div', { class: 'stack' }, h('b', {}, 'Zeit zum Beraten'),
@@ -164,7 +165,7 @@ function startGame() {
   run++;
   S = {
     players: Array.from({ length: n }, (_, i) => ({ id: i, name: setup.names[i] || `Spieler ${i + 1}`, role: dealt ? dealt[i] : null, alive: true, group: r.greis ? setup.groups[i] : null })),
-    opt: { captain: setup.captain, timer: setup.timer, mode: setup.mode, mod: setup.mod, quick: setup.quick, events: setup.events },
+    opt: { captain: setup.captain, timer: setup.timer, mode: setup.mode, mod: setup.mod, quick: setup.quick, events: setup.events, seerSimple: !!setup.seerSimple },
     deck, middle: dealt ? dealt.slice(n) : [], thief: !!r.dieb, gPool: r.gaukler ? [...setup.gPool] : [],
     night: 0, day: 0, phase: 'deal', heal: true, poison: true, lastProtected: null, lovers: [], captain: null, pendingHunters: [], nd: null,
     engelLive: !!r.engel, model: null,
@@ -248,7 +249,7 @@ function electCaptain(theme, next) {
 // ---------- Nacht ----------
 // Aufrufreihenfolge nach der Übersicht im Regelheft. Welche Schritte anfallen, wird laufend neu geprüft.
 const NIGHT = ['dieb', 'gaukler', 'amor', 'seherin', 'fuchs', 'lovers', 'richter', 'schwestern', 'brueder', 'wildkind', 'wolfshund', 'baerenfuehrer', 'greis',
-  'rabe', 'beschuetzer', 'werwolf', 'weisserwolf', 'urwolf', 'grosserwolf', 'fuchs2', 'hexe', 'floetenspieler', 'verzaubert'];
+  'rabe', 'beschuetzer', 'werwolf', 'weisserwolf', 'urwolf', 'grosserwolf', 'fuchs2', 'seherin2', 'hexe', 'floetenspieler', 'verzaubert'];
 function due(id) {
   const n1 = S.night === 1, nd = S.nd;
   switch (id) {
@@ -256,6 +257,8 @@ function due(id) {
     case 'gaukler': return can('gaukler') && S.gPool.length > 0;
     case 'amor': return n1 && can('amor');
     case 'lovers': return S.lovers.length === 2 && !S.loversMet;
+    case 'seherin': return can('seherin') && !(S.opt.seerSimple && UNKNOWN() && n1);
+    case 'seherin2': return can('seherin') && S.opt.seerSimple && UNKNOWN() && n1; // Hausregel: erst wenn die Wölfe bekannt sind
     case 'fuchs': return can('fuchs') && !S.foxOut && !(UNKNOWN() && n1);
     case 'fuchs2': return can('fuchs') && !S.foxOut && UNKNOWN() && n1; // mit echten Karten erst, wenn die Wölfe bekannt sind
     case 'richter': return n1 && MOD() && can('richter');
@@ -269,7 +272,7 @@ function due(id) {
     case 'grosserwolf': return can('grosserwolf') && !S.wolfLost;
     case 'hexe': return can('hexe') && (S.heal || S.poison);
     case 'verzaubert': return nd.enchant.length > 0;
-    default: return can(id); // seherin, rabe, beschuetzer, floetenspieler
+    default: return can(id); // rabe, beschuetzer, floetenspieler
   }
 }
 function beginNight() { S.night++; S.phase = 'night'; save(); runNight(); }
@@ -296,7 +299,7 @@ function nightStep(k) {
   let i = k;
   while (i < NIGHT.length && !due(NIGHT[i])) i++;
   if (i >= NIGHT.length) return morning();
-  const id = NIGHT[i] === 'fuchs2' ? 'fuchs' : NIGHT[i];
+  const id = NIGHT[i].replace(/2$/, ''); // fuchs2 und seherin2 sind dieselben Schritte an späterer Stelle
   STEP[id](line => sleepThen(i, line), () => nightStep(i + 1));
 }
 // Rolle schläft ein, kurze Pause, dann ist die nächste dran. Ohne Aufnahme liest der Spielleiter und tippt weiter.
@@ -396,6 +399,18 @@ const STEP = {
       rule: p => eff(p) === 'seherin' ? { off: true, sub: m ? 'Seherin' : 'das bist du' } : {},
       onPick: id => {
         const p = P(id), R = p.role && ROLES[p.role]; // mit echten Karten kann die Rolle noch unbekannt sein
+        if (S.opt.seerSimple) { // Hausregel: nur Werwolf oder nicht – wer nachts mit dem Rudel aufwacht, zählt als Werwolf
+          const wolf = isWolf(p);
+          show({ theme: 'night', title: `Nacht ${S.night}`, help: 'seherin', body: [
+            m && narrator('Seherin, ich gebe dir jetzt ein Zeichen. Daumen nach unten bedeutet: ein Werwolf. Daumen nach oben bedeutet: kein Werwolf.', true,
+              wolf ? 'Zeige der Seherin den Daumen nach unten.' : 'Zeige der Seherin den Daumen nach oben.'),
+            h('div', { class: 'reveal ' + (wolf ? 'bad' : 'ok') }, `${p.name} ist ${wolf ? 'ein Werwolf' : 'kein Werwolf'}`),
+            !m && h('p', { class: 'center soft' }, 'Merk es dir gut – das wird nicht vorgelesen.'),
+            h('div', { class: 'spacer' }),
+            h('button', { class: 'btn primary big', onclick: () => { Speech.stop(); next(sleep); } }, m ? 'Erledigt' : 'Gemerkt'),
+          ] });
+          return false;
+        }
         const sign = 'Seherin, ich zeige dir jetzt die Karte dieses Spielers.';
         show({ theme: 'night', title: `Nacht ${S.night}`, help: 'seherin', body: [
           m && narrator(sign, true, R ? `Zeige der Seherin kurz diesen Bildschirm: ${p.name} hat die Rolle „${R.name}“.` : `Hebe die Karte von ${p.name} verdeckt an und zeige sie nur der Seherin.`),
@@ -857,7 +872,7 @@ const HELP = {
   gaukler: ['Der Gaukler wählt eine der drei offen ausliegenden Rollen und spielt sie bis zur nächsten Nacht. Die Karte kommt danach aus dem Spiel.'],
   amor: ['Amor bestimmt zwei Verliebte. Danach werden beide an der Schulter berührt, wachen kurz auf und erkennen sich.', 'Scheidet einer aus, geht der andere mit. Verliebte stimmen nie gegeneinander.'],
   beschuetzer: ['Der Heiler schützt einen Spieler vor den Werwölfen – auch sich selbst, aber nie zweimal hintereinander denselben.', 'Das Kleine Mädchen kann er nicht schützen, und gegen die Infektion des Urwolfs hilft er nicht.'],
-  seherin: ['Die Seherin sucht einen Spieler aus. Sie erfährt, welche Rolle dieser Spieler wirklich hat – auf dem Bildschirm oder über die echte Karte.'],
+  seherin: ['Die Seherin sucht einen Spieler aus. Sie erfährt, welche Rolle dieser Spieler wirklich hat – auf dem Bildschirm oder über die echte Karte.', 'Mit der Hausregel unter „Extras“ erfährt sie stattdessen nur, ob der Spieler ein Werwolf ist. Infizierte und Seitenwechsler auf Wolfsseite zählen dabei als Werwolf.'],
   fuchs: ['Der Fuchs zeigt auf einen Spieler. Geprüft werden dieser Spieler und seine beiden Nachbarn, die noch im Spiel sind.', 'Ist kein Werwolf dabei, verliert der Fuchs seine Fähigkeit.'],
   werwolf: ['Nur die Werwölfe haben die Augen offen. Sie einigen sich ohne Worte auf ein Opfer.', 'Werwölfe sind markiert und können nicht gewählt werden. Neue Rudelmitglieder (infiziert, Wildes Kind) werden zum Aufwachen an der Schulter berührt.'],
   hexe: ['Die Hexe sieht, wen die Werwölfe angegriffen haben.', 'Heiltrank: rettet ein Opfer der Werwölfe, auch die Hexe selbst. Gifttrank: lässt einen beliebigen Spieler ausscheiden.', 'Jeder Trank geht nur einmal im ganzen Spiel, beide dürfen in derselben Nacht benutzt werden.'],
