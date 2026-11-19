@@ -284,16 +284,21 @@ function sleepScreen(text, onNext) {
     onNext && h('button', { class: 'btn primary big', onclick: onNext }, 'Weiter'),
   ] });
 }
-async function runNight() {
-  const t = run;
+// Zeigt einen Übergangstext und geht nach der Erzählung (plus Pause) von selbst weiter.
+// Der Knopf "Weiter" bricht die Erzählung ab und geht sofort weiter. Ohne Aufnahme wartet der Bildschirm auf den Knopf.
+function passage(text, pause, then) {
+  const t = run; let done = false;
+  const go = () => { if (done || t !== run) return; done = true; Speech.stop(); then(); };
+  sleepScreen(text, go);
+  if (allClips(text)) Speech.speak(text).then(() => wait(pause)).then(go);
+}
+function runNight() {
   S.players.forEach(p => { p.actAs = null; });
   S.nd = { protect: null, victims: [], infect: null, healed: null, poison: null, white: null, enchant: [], raven: null };
   const intro = S.night === 1
     ? 'Es wird Nacht im Finsterwald. Der Mond steigt über die Bäume, und im Dorf wird es ganz still. Alle schließen jetzt die Augen.'
     : 'Der Tag geht zu Ende. Es wird wieder Nacht im Finsterwald. Alle schließen die Augen.';
-  sleepScreen(intro);
-  await Speech.speak(intro); await wait(1500);
-  if (t === run) nightStep(0);
+  passage(intro, 1500, () => nightStep(0));
 }
 function nightStep(k) {
   let i = k;
@@ -304,10 +309,7 @@ function nightStep(k) {
 }
 // Rolle schläft ein, kurze Pause, dann ist die nächste dran. Ohne Aufnahme liest der Spielleiter und tippt weiter.
 function sleepThen(i, line) {
-  const t = run;
-  if (!allClips(line)) return sleepScreen(line, () => nightStep(i + 1));
-  sleepScreen(line);
-  Speech.speak(line).then(() => wait(1800)).then(() => { if (t === run) nightStep(i + 1); });
+  passage(line, 1800, () => nightStep(i + 1));
 }
 // Mit echten Karten kennt der Spielleiter die Rollen nicht: beim ersten Aufwachen antippen, wer es ist.
 // go(gesprochen, niemand): niemand = die Karte liegt beim Dieb in der Mitte.
@@ -385,10 +387,9 @@ const STEP = {
       : 'Amor, steh leise auf und tippe den beiden Verliebten sanft auf die Schulter. Setz dich dann wieder hin und drücke auf den Knopf.';
     ask({ help: 'amor', text, hint: m && `Geh leise herum und tippe ${names} auf die Schulter. Drücke danach auf „Erledigt“.`,
       body: h('div', { class: 'card center' }, h('div', { class: 'pair' }, S.lovers.map(id => av(P(id)))), h('h2', {}, S.lovers.map(id => P(id).name).join(' & '))),
-      buttons: [['Erledigt', async () => {
-        const t = run, a = (m ? '' : 'Amor schläft wieder ein. ') + 'Wer eben an der Schulter berührt wurde, ist jetzt verliebt. Die Verliebten wachen auf und schauen sich an.';
-        sleepScreen(a); await Speech.speak(a); await wait(5000);
-        if (t === run) next('Die Verliebten schlafen wieder ein.');
+      buttons: [['Erledigt', () => {
+        const a = (m ? '' : 'Amor schläft wieder ein. ') + 'Wer eben an der Schulter berührt wurde, ist jetzt verliebt. Die Verliebten wachen auf und schauen sich an.';
+        passage(a, 5000, () => next('Die Verliebten schlafen wieder ein.'));
       }, 'primary']] });
   },
   seherin(next) {
